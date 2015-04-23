@@ -1,0 +1,366 @@
+package main
+
+import (
+	"bufio"
+	//	"crypto/rand"
+	"encoding/json"
+	//	"errors"
+	"fmt"
+	. "github.com/dgryski/dgobloom"
+	"hash/fnv"
+	"io"
+	"io/ioutil"
+	//	"log"
+	"math/rand"
+	//	"net/http"
+	//	"net/url"
+	"os"
+	"os/exec"
+	"strconv"
+	//	"strings"
+	"sync"
+	"time"
+)
+
+var mark, all int
+var Sentence map[string]float32
+
+func pons(str ...interface{}) {
+	fmt.Println(str)
+}
+
+func fetchMind(tem []string, dept int) bool {
+	var outPut []string
+	var weight float32
+	for i := 0; i < len(tem); i++ {
+		str, w := getLink(tem[i], dept)
+		weight += w
+		outPut = append(outPut, str)
+	}
+	var sentence string
+	for _, j := range outPut {
+		sentence += j
+	}
+	Sentence[sentence] = weight
+	return true
+}
+
+func getLink(temJ string, dept int) (string, float32) {
+
+	var toLinkMap map[string]map[string]float32
+	//	var selectBloom BloomFilter
+	//	var selectInt int
+	for j := 1; j < 3; j++ {
+		bloomFile := "resouce\\link_" + strconv.Itoa(j) + "\\bloom_" + strconv.Itoa(j) + ".txt"
+
+		writeLock[j-1] <- 1
+		_, err := os.Stat(bloomFile)
+		if os.IsNotExist(err) {
+			continue
+		}
+		<-writeLock[j-1]
+		//获取遍历布隆
+		rangeBloom := readData(bloomFile, j)
+
+		//假如这个布隆有该元素
+		if rangeBloom.Exists([]byte(temJ)) {
+			//			pons(j, "getting it", temJ, rangeBloom.Exists([]byte(temJ)))
+			//			pons(rangeBloom.Itself().Salts, rangeBloom.Itself().Bits, rangeBloom.Itself().Elements)
+			//			selectBloom = rangeBloom
+			linkFile := "resouce\\link_" + strconv.Itoa(j) + "\\link_" + strconv.Itoa(j) + ".txt"
+			lfile, _ := os.Open(linkFile)
+			defer func() {
+				lfile.Close()
+			}()
+			decoderRM := json.NewDecoder(lfile)
+			selectlinkMap := make(map[string]map[string]float32)
+			decoderRM.Decode(&selectlinkMap)
+			toLinkMap = selectlinkMap
+			//			selectInt = j
+			break
+		}
+
+	}
+	if nil == toLinkMap {
+		return "", 0.0
+	}
+	if nil != toLinkMap[temJ] {
+		var count float32
+		count = 0
+		for _, rangK := range toLinkMap[temJ] {
+			count += rangK
+		}
+		rand.Seed(time.Now().UnixNano())
+		count = float32(rand.Int31n(int32(count)))
+		for rangJ, rangK := range toLinkMap[temJ] {
+			if count <= rangK {
+				return rangJ, rangK
+			}
+			count -= rangK
+		}
+
+	} else {
+		return "", 0.0
+	}
+	return "", 0.0
+}
+
+func Sub(str string, pre []string, deep, dept int) int {
+	rs := []rune(str)
+	rl := len(rs)
+	end := rl
+	for i := 1; i < rl; i++ {
+		if deep > dept-1 {
+			tem := append(pre, string(rs[0:i]), string(rs[i:end]))
+			j := 0
+			k := 1
+
+			for k < len(tem) {
+
+				if linkMap.Exists([]byte(tem[j] + "/" + tem[k])) {
+					//					mark++
+					//					pons("", mark, "/", all, float64(mark)/float64(all))
+					//					continue
+				} else {
+					all++
+					linkMap.Insert([]byte(tem[j] + "/" + tem[k]))
+					//					pons("put in", tem[j], tem[k], dept, all)
+					GoLink(tem[j], tem[k], dept)
+				}
+				//				fmt.Println(tem[j])
+				//				fmt.Println(tem[k])
+				j++
+				k++
+			}
+			fetchMind(tem, dept)
+
+		}
+
+		if deep < dept {
+			Sub(string(rs[i:end]), append(pre, string(rs[0:i])), deep+1, dept)
+		}
+
+	}
+	return dept
+}
+func readData(bloomFile string, lockNum int) BloomFilter {
+	readLock[lockNum-1] <- 1
+	bfile, err := os.Open(bloomFile)
+	defer func() {
+		bfile.Close()
+		<-readLock[lockNum-1]
+	}()
+	if err != nil {
+		pons(lockNum, "error:"+err.Error())
+	}
+	temSave := GobloomFilter{}
+	decoderRB := json.NewDecoder(bfile)
+	decoderRB.Decode(&temSave)
+	return NewBloomFilterByStruct(&temSave, fnv.New32a())
+}
+func GoLink(temJ, temK string, dept int) {
+	goWait.Add(1)
+	var toLinkMap map[string]map[string]float32
+	var selectBloom BloomFilter
+	var selectInt int
+	for j := 1; j < 3; j++ {
+		//		pons(all, "intoit", j, dept)
+		bloomFile := "resouce\\link_" + strconv.Itoa(j) + "\\bloom_" + strconv.Itoa(j) + ".txt"
+		//如果布隆不存在，新建后跳过
+		writeLock[j-1] <- 1
+		_, err := os.Stat(bloomFile)
+		if os.IsNotExist(err) {
+			saltsNeeded := SaltsRequired(CAPACITY, ERRPCT)
+			salts := make([]uint32, saltsNeeded)
+			for i := uint(0); i < saltsNeeded; i++ {
+				salts[i] = rand.Uint32()
+			}
+			tempBloom := NewBloomFilter(CAPACITY, ERRPCT, fnv.New32a(), salts)
+
+			selectBloomWriteFile, _ := os.Create(bloomFile)
+			writer := io.Writer(selectBloomWriteFile)
+			enc := json.NewEncoder(writer)
+			enc.Encode(tempBloom.Itself())
+
+			//			rangeBloom := readData(bloomFile,  j)
+			//			pons(rangeBloom.Itself().Salts, rangeBloom.Itself().Bits, rangeBloom.Itself().Elements)
+			//			pons("such", tempBloom.Itself().Bits, tempBloom.Itself().Capacity, tempBloom.Itself().Elements)
+			<-writeLock[j-1]
+
+			continue
+		}
+		<-writeLock[j-1]
+		//获取遍历布隆
+		rangeBloom := readData(bloomFile, j)
+
+		//假如这个布隆有该元素
+		if rangeBloom.Exists([]byte(temJ)) {
+			//			pons(j, "this", temJ, rangeBloom.Exists([]byte(temJ)))
+			//			pons(rangeBloom.Itself().Salts, rangeBloom.Itself().Bits, rangeBloom.Itself().Elements)
+			selectBloom = rangeBloom
+			linkFile := "resouce\\link_" + strconv.Itoa(j) + "\\link_" + strconv.Itoa(j) + ".txt"
+			lfile, _ := os.Open(linkFile)
+			defer func() {
+				lfile.Close()
+			}()
+			decoderRM := json.NewDecoder(lfile)
+			selectlinkMap := make(map[string]map[string]float32)
+			decoderRM.Decode(&selectlinkMap)
+			toLinkMap = selectlinkMap
+			selectInt = j
+			break
+		}
+
+	}
+	//无匹配的布隆，使用默认布隆和MAP
+	if nil == selectBloom {
+		//		pons(all, "outoutout", dept)
+		bloomFile := "resouce\\link_" + strconv.Itoa(dept) + "\\bloom_" + strconv.Itoa(dept) + ".txt"
+		selectBloom = readData(bloomFile, dept)
+
+		linkFile := "resouce\\link_" + strconv.Itoa(dept) + "\\link_" + strconv.Itoa(dept) + ".txt"
+		lfile, _ := os.Open(linkFile)
+		defer func() {
+			lfile.Close()
+		}()
+		decoderCM := json.NewDecoder(lfile)
+		selectlinkMap := make(map[string]map[string]float32)
+		decoderCM.Decode(&selectlinkMap)
+		toLinkMap = selectlinkMap
+		selectInt = dept
+		//		pons("create success", selectInt, dept)
+	}
+	selectBloom.Insert([]byte(temJ))
+	if nil != toLinkMap[temJ] {
+		if 0 != toLinkMap[temJ][temK] {
+			toLinkMap[temJ][temK]++
+		} else {
+			toLinkMap[temJ][temK] = 1
+		}
+
+	} else {
+		toLinkMap[temJ] = make(map[string]float32)
+		toLinkMap[temJ][temK] = 1
+	}
+	//写入
+	writeLock[selectInt-1] <- 1
+	selectBloomWriteFile, _ := os.Create("resouce\\link_" + strconv.Itoa(selectInt) + "\\bloom_" + strconv.Itoa(selectInt) + ".txt")
+	writer := io.Writer(selectBloomWriteFile)
+	enc := json.NewEncoder(writer)
+	enc.Encode(selectBloom.Itself())
+
+	bU, _ := json.Marshal(toLinkMap)
+	nameC := "resouce\\link_" + strconv.Itoa(selectInt) + "\\link_" + strconv.Itoa(selectInt) + ".txt"
+	ioutil.WriteFile(nameC, bU, 0777)
+	<-writeLock[selectInt-1]
+	//	toLinkMap = make(map[string]map[string]float32)
+
+	goWait.Done()
+}
+
+var writeLock, readLock []chan int
+var temLinkMap map[string]map[string]float32
+var linkMap BloomFilter
+
+const CAPACITY = 100000
+const ERRPCT = 0.01
+
+var goWait sync.WaitGroup
+
+func main_1() {
+	//	temLinkMap = make(map[string]map[string]float32)
+
+	fh, _ := os.Open("knowledge.txt")
+	buf := bufio.NewReader(fh)
+	for {
+		l, _, err := buf.ReadLine()
+		if err != nil {
+			break
+		}
+
+		sen := string(l)
+		pons(sen)
+		senRune := []rune(sen)
+		if len(sen) > 30 {
+			senRune = senRune[:10]
+		}
+		sentence := string(senRune)
+		Sentence = make(map[string]float32)
+		mark = 0
+		all = 0
+
+		writeLock = make([]chan int, 3)
+		writeLock[0] = make(chan int, 1)
+		writeLock[1] = make(chan int, 1)
+		writeLock[2] = make(chan int, 1)
+		readLock = make([]chan int, 3)
+		readLock[0] = make(chan int, 1)
+		readLock[1] = make(chan int, 1)
+		readLock[2] = make(chan int, 1)
+		/*
+		 * Bloom Filter
+		 */
+
+		saltsNeeded := SaltsRequired(CAPACITY, ERRPCT)
+		salts := make([]uint32, saltsNeeded)
+		for i := uint(0); i < saltsNeeded; i++ {
+			salts[i] = rand.Uint32()
+		}
+		linkMap = NewBloomFilter(CAPACITY, ERRPCT, fnv.New32a(), salts)
+		/*
+		 *
+		 */
+		for i := 1; i < 2; i++ {
+			cmd := exec.Command("cmd", "/C", "md", "resouce")
+			err := cmd.Start()
+			if err != nil {
+				pons("error:" + err.Error())
+			}
+			_, err = os.Stat("resouce")
+			if os.IsNotExist(err) {
+				i--
+				continue
+			}
+		}
+
+		for i := 1; i < 3; i++ {
+			cmd := exec.Command("cmd", "/C", "md", "resouce\\link_"+strconv.Itoa(i))
+			err := cmd.Start()
+			if err != nil {
+				pons("error:" + err.Error())
+			}
+			_, err = os.Stat("resouce\\link_" + strconv.Itoa(i))
+			if os.IsNotExist(err) {
+				i--
+				continue
+			}
+		}
+		for i := 1; i < 4; i++ {
+
+			Sub(sentence, []string{}, 1, i)
+
+			//			pons(linkMap.GetElements())
+		}
+		linkMap = NewBloomFilter(CAPACITY, ERRPCT, fnv.New32a(), salts)
+
+		var count float32
+		count = 1
+		for _, weight := range Sentence {
+			count += weight
+		}
+		rand.Seed(time.Now().UnixNano())
+		count = float32(rand.Int63n(int64(count))) - 1
+		for outStr, weight := range Sentence {
+			if count <= weight {
+				pons("I say:", outStr)
+				break
+			}
+			count -= weight
+		}
+
+		Sentence = make(map[string]float32)
+		goWait.Wait()
+
+	}
+
+}
